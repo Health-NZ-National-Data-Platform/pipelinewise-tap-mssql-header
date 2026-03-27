@@ -165,7 +165,7 @@ def prepare_columns_sql(catalog_entry, c):
     return column_name
 
 
-def generate_select_sql(catalog_entry, columns, multi_column_replication, header_table_replication):
+def generate_select_sql(catalog_entry, columns, multi_column_replication=False, header_table_replication=False):
     database_name = get_database_name(catalog_entry)
     escaped_db = escape(database_name)
     escaped_table = escape(catalog_entry.table)
@@ -271,9 +271,12 @@ def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
         singer.clear_bookmark(state, tap_stream_id, bk)
 
 
-def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params, config, multi_column_replication, header_table_replication, header_table_replication_key_value):
+def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params, config, multi_column_replication=False, header_table_replication=False, header_table_replication_key_value=False):
     replication_key = singer.get_bookmark(state, catalog_entry.tap_stream_id, "replication_key")
-
+    md_map = metadata.to_map(catalog_entry.metadata)
+    stream_metadata = md_map.get((), {})
+    replication_method = stream_metadata.get("replication-method")
+    
     # query_string = cursor.mogrify(select_sql, params)
 
     time_extracted = utils.now()
@@ -298,9 +301,6 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                 catalog_entry, stream_version, row, columns, time_extracted, config
             )
             singer.write_message(record_message)
-            md_map = metadata.to_map(catalog_entry.metadata)
-            stream_metadata = md_map.get((), {})
-            replication_method = stream_metadata.get("replication-method")
 
             if replication_method == "FULL_TABLE":
                 key_properties = get_key_properties(catalog_entry)
