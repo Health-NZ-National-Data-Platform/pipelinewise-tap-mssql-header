@@ -165,6 +165,21 @@ def prepare_columns_sql(catalog_entry, c):
     return column_name
 
 
+def build_greatest_case(cols):
+    if not cols:
+        return "'1900-01-01'"
+    
+    # Start with the first column wrapped in ISNULL
+    current = f"ISNULL({cols[0]}, '1900-01-01')"
+    
+    # Fold remaining columns into a nested CASE
+    for col in cols[1:]:
+        next_col = f"ISNULL({col}, '1900-01-01')"
+        current = f"CASE WHEN {current} >= {next_col} THEN {current} ELSE {next_col} END"
+        
+    return current
+
+
 def generate_select_sql(catalog_entry, columns, multi_column_replication=False, header_table_replication=False):
     database_name = get_database_name(catalog_entry)
     escaped_db = escape(database_name)
@@ -176,11 +191,12 @@ def generate_select_sql(catalog_entry, columns, multi_column_replication=False, 
         escaped_multi_replication_key_columns = map(lambda c: prepare_columns_sql(catalog_entry, c), multi_replication_key_columns)
         columns.pop()
         escaped_columns = map(lambda c: prepare_columns_sql(catalog_entry, c), columns)
-        select_sql = "SELECT {}, (SELECT MAX(val) FROM (VALUES {}) AS t(val)) as MultiReplicationKeyColumn FROM {}.{}".format(
-            ",".join(escaped_columns),
-            ", ".join([f"(ISNULL({col}, '1900-01-01'))" for col in list(escaped_multi_replication_key_columns)]),
-            escaped_db,
-            escaped_table
+        case_logic = build_greatest_case(list(escaped_multi_replication_key_columns))
+        select_sql = "SELECT {cols}, {greatest} AS MultiReplicationKeyColumn FROM {db}.{table}".format(
+            cols=", ".join([f"{c}" for c in escaped_columns]),
+            greatest=case_logic,
+            db=escaped_db,
+            table=escaped_table
         )
     else:
         if multi_column_replication and header_table_replication:
@@ -271,12 +287,12 @@ def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
         singer.clear_bookmark(state, tap_stream_id, bk)
 
 
-def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params, config, multi_column_replication=False, header_table_replication=False, header_table_replication_key_value=False):
+def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params, config, multi_column_replication=False, header_table_replication=False, header_table_replication_key_value=None):
     replication_key = singer.get_bookmark(state, catalog_entry.tap_stream_id, "replication_key")
     md_map = metadata.to_map(catalog_entry.metadata)
     stream_metadata = md_map.get((), {})
     replication_method = stream_metadata.get("replication-method")
-    
+
     # query_string = cursor.mogrify(select_sql, params)
 
     time_extracted = utils.now()
